@@ -32,6 +32,11 @@ module.exports = (options, next) ->
   
   stepc.async(
 
+    # validate fields
+    (() -> 
+      validate(options, @)
+    ),
+
     # connect to mongodb
     o.s(() ->   
       connect({ db: options.db }, @)
@@ -44,47 +49,33 @@ module.exports = (options, next) ->
 
     # load the collection paths
     o.s(() ->
-      loadData options, @
+      glob options.path, @
     )
 
     #
-    o.s((data) ->
-      importFixtures data, @db, @
+    o.s((collectionFiles) ->
+
+      collectionFiles = collectionFiles.filter((name) ->
+        not /.DS_Store/.test(name) and /(json|js)$/.test(name)
+      )
+
+      importFixtures collectionFiles, @db, @
     ),
 
     #
     next
   )
 
-
-loadData = (options, next) ->
-
-  if options.data
-    return next(null, options.data)
-
-
-  collectionFiles = glob.sync(options.path).filter (name) ->
-    not /.DS_Store/.test(name) and /(json|js)$/.test(name)  
-
-
-  data = []
-
-  collectionFiles.forEach (fp) ->
-    data = data.concat require fp
-
-
-  next null, data
-
 ###
 ###
 
-importFixtures = (data, db, next) ->
+importFixtures = (fixturePaths, db, next) ->
 
   o = outcome.e next
 
   stepc.async(
     (() ->
-      loadFixtures data, @
+      loadFixtures fixturePaths, @
     ),
     o.s((@items) ->
       removeReferences db, items, @
@@ -99,14 +90,24 @@ importFixtures = (data, db, next) ->
   )
 
 
-loadFixtures = (items, next) ->
+loadFixtures = (fixturePaths, next) ->
+  
+  items = []
 
-  next null, items.map (item) ->
-    # fix the object type
-    traverse(item.data).forEach (x) ->
-      if x and x.__type
-        this.update(new _types[x.__type](x.value))
-    item
+  async.eachSeries fixturePaths, ((fixturePath, next) ->
+    
+    # construct and require proper path
+    absPath = path.join process.cwd(), fixturePath
+    items = items.concat require(absPath)
+
+    next()
+  ), outcome.e(next).s () ->
+    next null, items.map (item) ->
+      # fix the object type
+      traverse(item.data).forEach (x) ->
+        if x and x.__type
+          this.update(new _types[x.__type](x.value))
+      item
 
 removeExplicit = (db, items, next) ->
   rm = items.filter (item) -> item.method is "remove"
